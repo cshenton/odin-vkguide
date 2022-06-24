@@ -11,6 +11,7 @@ Engine :: struct {
 	debug_messenger: vk.DebugUtilsMessengerEXT,
 	gpu:             vk.PhysicalDevice,
 	device:          vk.Device,
+	graphics_queue:  vk.Queue,
 	surface:         vk.SurfaceKHR,
 }
 
@@ -121,6 +122,13 @@ create_engine :: proc() -> Engine {
 		panic("pish")
 	}
 
+	// Create surface
+	surface: vk.SurfaceKHR
+	result = glfw.CreateWindowSurface(instance, window, nil, &surface)
+	if (result != .SUCCESS) {
+		panic("surface creation failed")
+	}
+
 	// Query physical devices
 	device_count: u32
 	gpu: vk.PhysicalDevice
@@ -156,7 +164,9 @@ create_engine :: proc() -> Engine {
 	defer delete(queue_families)
 	vk.GetPhysicalDeviceQueueFamilyProperties(gpu, &queue_family_count, &queue_families[0])
 	for family, i in queue_families {
-		if .GRAPHICS in family.queueFlags {
+		is_present: b32
+		vk.GetPhysicalDeviceSurfaceSupportKHR(gpu, u32(i), surface, &is_present)
+		if .GRAPHICS in family.queueFlags && is_present {
 			graphics_index = u32(i)
 		}
 	}
@@ -183,9 +193,12 @@ create_engine :: proc() -> Engine {
 		panic("device creation failed")
 	}
 
+	// Get Queues
+	graphics_queue: vk.Queue
+	vk.GetDeviceQueue(device, graphics_index, 0, &graphics_queue)
+
 	// Load device procedures
 	vk.load_proc_addresses(device)
-
 
 	engine := Engine {
 		window          = window,
@@ -193,12 +206,15 @@ create_engine :: proc() -> Engine {
 		debug_messenger = debug_messenger,
 		gpu             = gpu,
 		device          = device,
+		graphics_queue  = graphics_queue,
+		surface         = surface,
 	}
 	return engine
 }
 
 destroy_engine :: proc(engine: ^Engine) {
 	vk.DestroyDevice(engine.device, nil)
+	vk.DestroySurfaceKHR(engine.instance, engine.surface, nil)
 	vk.DestroyDebugUtilsMessengerEXT(engine.instance, engine.debug_messenger, nil)
 	vk.DestroyInstance(engine.instance, nil)
 	glfw.DestroyWindow(engine.window)
