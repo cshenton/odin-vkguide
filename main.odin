@@ -121,18 +121,84 @@ create_engine :: proc() -> Engine {
 		panic("pish")
 	}
 
+	// Query physical devices
+	device_count: u32
+	gpu: vk.PhysicalDevice
+	best_score := 0
+	vk.EnumeratePhysicalDevices(instance, &device_count, nil)
+	devices := make([]vk.PhysicalDevice, device_count)
+	defer delete(devices)
+	vk.EnumeratePhysicalDevices(instance, &device_count, &devices[0])
+	for dev in devices {
+		score := 0
+
+		device_features: vk.PhysicalDeviceFeatures
+		device_properties: vk.PhysicalDeviceProperties
+		vk.GetPhysicalDeviceFeatures(dev, &device_features)
+		vk.GetPhysicalDeviceProperties(dev, &device_properties)
+
+		if device_properties.deviceType == .DISCRETE_GPU {
+			score += 1000
+		}
+
+		if score > best_score {
+			gpu = dev
+			best_score = score
+		}
+	}
+
+	// Find queue families
+	// TODO: Actually this should be used to choose the device
+	graphics_index: u32
+	queue_family_count: u32
+	vk.GetPhysicalDeviceQueueFamilyProperties(gpu, &queue_family_count, nil)
+	queue_families := make([]vk.QueueFamilyProperties, queue_family_count)
+	defer delete(queue_families)
+	vk.GetPhysicalDeviceQueueFamilyProperties(gpu, &queue_family_count, &queue_families[0])
+	for family, i in queue_families {
+		if .GRAPHICS in family.queueFlags {
+			graphics_index = u32(i)
+		}
+	}
+
+	// Create logical device
+	device: vk.Device
+	queue_priority := f32(1)
+	queue_create_info := vk.DeviceQueueCreateInfo {
+		sType            = .DEVICE_QUEUE_CREATE_INFO,
+		queueFamilyIndex = graphics_index,
+		queueCount       = 1,
+		pQueuePriorities = &queue_priority,
+	}
+	device_create_info := vk.DeviceCreateInfo {
+		sType                = .DEVICE_CREATE_INFO,
+		pQueueCreateInfos    = &queue_create_info,
+		queueCreateInfoCount = 1,
+		pEnabledFeatures     = &vk.PhysicalDeviceFeatures{},
+		enabledLayerCount    = len(validation_layers),
+		ppEnabledLayerNames  = &validation_layers[0],
+	}
+	result = vk.CreateDevice(gpu, &device_create_info, nil, &device)
+	if (result != .SUCCESS) {
+		panic("device creation failed")
+	}
+
 	// Load device procedures
-	// vk.load_proc_addresses(device)
+	vk.load_proc_addresses(device)
+
 
 	engine := Engine {
 		window          = window,
 		instance        = instance,
 		debug_messenger = debug_messenger,
+		gpu             = gpu,
+		device          = device,
 	}
 	return engine
 }
 
 destroy_engine :: proc(engine: ^Engine) {
+	vk.DestroyDevice(engine.device, nil)
 	vk.DestroyDebugUtilsMessengerEXT(engine.instance, engine.debug_messenger, nil)
 	vk.DestroyInstance(engine.instance, nil)
 	glfw.DestroyWindow(engine.window)
