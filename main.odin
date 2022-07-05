@@ -77,27 +77,28 @@ create_engine :: proc() -> Engine {
 	}
 
 	// Create instance
-	result := vk.CreateInstance(
-		&vk.InstanceCreateInfo{
-			sType = .INSTANCE_CREATE_INFO,
-			pApplicationInfo = &vk.ApplicationInfo{
-				sType = .APPLICATION_INFO,
-				pApplicationName = "Vulkan Odin",
-				applicationVersion = vk.MAKE_VERSION(1, 0, 0),
-				pEngineName = "Odin",
-				engineVersion = vk.MAKE_VERSION(1, 0, 0),
-				apiVersion = vk.API_VERSION_1_3,
+	result :=
+		vk.CreateInstance(
+			&vk.InstanceCreateInfo{
+				sType = .INSTANCE_CREATE_INFO,
+				pApplicationInfo = &vk.ApplicationInfo{
+					sType = .APPLICATION_INFO,
+					pApplicationName = "Vulkan Odin",
+					applicationVersion = vk.MAKE_VERSION(1, 0, 0),
+					pEngineName = "Odin",
+					engineVersion = vk.MAKE_VERSION(1, 0, 0),
+					apiVersion = vk.API_VERSION_1_3,
+				},
+				enabledExtensionCount = u32(len(all_extensions)),
+				ppEnabledExtensionNames = &all_extensions[0],
+				enabledLayerCount = 1,
+				ppEnabledLayerNames = &validation_layers[0],
 			},
-			enabledExtensionCount = u32(len(all_extensions)),
-			ppEnabledExtensionNames = &all_extensions[0],
-			enabledLayerCount = 1,
-			ppEnabledLayerNames = &validation_layers[0],
-		},
-		nil,
-		&instance,
-	)
+			nil,
+			&instance,
+		)
 	if (result != .SUCCESS) {
-		panic("pish")
+		panic("Failed to create instance")
 	}
 
 	// Load instance procedures
@@ -112,63 +113,72 @@ create_engine :: proc() -> Engine {
 		pfnUserCallback = vk.ProcDebugUtilsMessengerCallbackEXT(debug_callback),
 		pUserData = nil,
 	}
-	result = vk.CreateDebugUtilsMessengerEXT(
-		instance,
-		&debug_create_info,
-		nil,
-		&debug_messenger,
-	)
+	result = vk.CreateDebugUtilsMessengerEXT(instance, &debug_create_info, nil, &debug_messenger)
 	if (result != .SUCCESS) {
-		panic("pish")
+		panic("Failed to create debug messenger")
 	}
 
 	// Create surface
 	surface: vk.SurfaceKHR
 	result = glfw.CreateWindowSurface(instance, window, nil, &surface)
 	if (result != .SUCCESS) {
-		panic("surface creation failed")
+		panic("Failed to create surface")
 	}
 
-	// Query physical devices
-	device_count: u32
+	// Find an appropriate physical device
 	gpu: vk.PhysicalDevice
-	best_score := 0
+	graphics_index: u32
+	gpu_found := false
+
+	device_count: u32
 	vk.EnumeratePhysicalDevices(instance, &device_count, nil)
 	devices := make([]vk.PhysicalDevice, device_count)
 	defer delete(devices)
 	vk.EnumeratePhysicalDevices(instance, &device_count, &devices[0])
+
 	for dev in devices {
-		score := 0
-
-		device_features: vk.PhysicalDeviceFeatures
-		device_properties: vk.PhysicalDeviceProperties
-		vk.GetPhysicalDeviceFeatures(dev, &device_features)
-		vk.GetPhysicalDeviceProperties(dev, &device_properties)
-
-		if device_properties.deviceType == .DISCRETE_GPU {
-			score += 1000
+		// Ensure the device has the swapchain extension
+		has_extension := false
+		dev_extension_count: u32
+		vk.EnumerateDeviceExtensionProperties(dev, nil, &dev_extension_count, nil)
+		dev_extensions := make([]vk.ExtensionProperties, dev_extension_count)
+		defer delete(dev_extensions)
+		vk.EnumerateDeviceExtensionProperties(dev, nil, &dev_extension_count, &dev_extensions[0])
+		for ext in &dev_extensions {
+			if string(cstring(&ext.extensionName[0])) == string(vk.KHR_SWAPCHAIN_EXTENSION_NAME) {
+				has_extension = true
+			}
 		}
 
-		if score > best_score {
+		// Ensure the device is a discrete GPU
+		device_properties: vk.PhysicalDeviceProperties
+		vk.GetPhysicalDeviceProperties(dev, &device_properties)
+		is_discrete := (device_properties.deviceType == .DISCRETE_GPU)
+
+		// Ensure the device has a queue supporting presentation
+		is_present: b32
+		queue_family_count: u32
+		vk.GetPhysicalDeviceQueueFamilyProperties(dev, &queue_family_count, nil)
+		queue_families := make([]vk.QueueFamilyProperties, queue_family_count)
+		defer delete(queue_families)
+		vk.GetPhysicalDeviceQueueFamilyProperties(dev, &queue_family_count, &queue_families[0])
+		for family, i in queue_families {
+			vk.GetPhysicalDeviceSurfaceSupportKHR(dev, u32(i), surface, &is_present)
+			if (.GRAPHICS in family.queueFlags) && is_present {
+				graphics_index = u32(i)
+				break
+			}
+		}
+
+		// Choose the device 
+		if is_discrete && has_extension && is_present {
+			gpu_found = true
 			gpu = dev
-			best_score = score
+			break
 		}
 	}
-
-	// Find queue families
-	// TODO: Actually this should be used to choose the device
-	graphics_index: u32
-	queue_family_count: u32
-	vk.GetPhysicalDeviceQueueFamilyProperties(gpu, &queue_family_count, nil)
-	queue_families := make([]vk.QueueFamilyProperties, queue_family_count)
-	defer delete(queue_families)
-	vk.GetPhysicalDeviceQueueFamilyProperties(gpu, &queue_family_count, &queue_families[0])
-	for family, i in queue_families {
-		is_present: b32
-		vk.GetPhysicalDeviceSurfaceSupportKHR(gpu, u32(i), surface, &is_present)
-		if .GRAPHICS in family.queueFlags && is_present {
-			graphics_index = u32(i)
-		}
+	if !gpu_found {
+		panic("Failed to find appropriate physical device")
 	}
 
 	// Create logical device
@@ -190,7 +200,7 @@ create_engine :: proc() -> Engine {
 	}
 	result = vk.CreateDevice(gpu, &device_create_info, nil, &device)
 	if (result != .SUCCESS) {
-		panic("device creation failed")
+		panic("Failed to create device")
 	}
 
 	// Get Queues
@@ -213,11 +223,12 @@ create_engine :: proc() -> Engine {
 }
 
 destroy_engine :: proc(engine: ^Engine) {
-	vk.DestroyDevice(engine.device, nil)
-	vk.DestroySurfaceKHR(engine.instance, engine.surface, nil)
-	vk.DestroyDebugUtilsMessengerEXT(engine.instance, engine.debug_messenger, nil)
-	vk.DestroyInstance(engine.instance, nil)
-	glfw.DestroyWindow(engine.window)
+	using engine
+	vk.DestroyDevice(device, nil)
+	vk.DestroySurfaceKHR(instance, surface, nil)
+	vk.DestroyDebugUtilsMessengerEXT(instance, debug_messenger, nil)
+	vk.DestroyInstance(instance, nil)
+	glfw.DestroyWindow(window)
 	glfw.Terminate()
 }
 
